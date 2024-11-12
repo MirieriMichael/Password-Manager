@@ -2,10 +2,9 @@ const crypto = require('crypto');
 const { connectDB } = require('./db');
 
 class PasswordManager {
-    constructor() {
-        this.db = null;
-        this.key = null;
-        this.kvs = {};
+    constructor(key, kvs) {
+        this.key = key;
+        this.kvs = kvs || {}; 
     }
 
     static async init(password) {
@@ -20,6 +19,29 @@ class PasswordManager {
         const salt = crypto.randomBytes(16);
         return crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256');
     }
+
+     static async load(password, representation, trustedDataCheck) {
+        if (trustedDataCheck) {
+            const calculatedHash = crypto.createHash('sha256').update(representation).digest('hex');
+            if (calculatedHash !== trustedDataCheck) {
+                throw new Error('Data integrity check failed. Possible rollback attack detected.');
+            }
+        }
+
+        const parsedData = JSON.parse(representation);
+
+        const salt = Buffer.from(parsedData.salt, 'hex'); // Salt stored in the serialized data
+        const derivedKey = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256');
+
+        const passwordManager = new PasswordManager(derivedKey, parsedData.kvs);
+
+        if (!passwordManager.verifySwap(parsedData.kvs)) {
+            throw new Error('Swap attack detected. Data integrity compromised.');
+        }
+
+        return passwordManager;    
+    }
+
 
     async set(name, value) {
         const domainKey = this.generateDomainKey(name);
@@ -73,6 +95,7 @@ class PasswordManager {
         const hash = crypto.createHash('sha256').update(JSON.stringify(records)).digest('hex');
         return [JSON.stringify(records), hash];
     }
+
 }
 
 module.exports = PasswordManager;
